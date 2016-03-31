@@ -10,16 +10,21 @@
 
 #include <xwiimote.h>
 
-int main(int argc, char *argv[])
+typedef struct  {
+    int32_t x;
+    int32_t y;
+    int32_t z;
+} vec3;
+
+int timeout = 5000;
+int poll_rate = 1000;
+FILE *out_file;
+char *f_name;
+
+int parse_cmdline(int argc, char *argv[])
 {
-    int timeout = 5000;
-    int poll_rate = 100;
-    FILE *out_file = stdout;
+    out_file = stdout;
     char opt_char = getopt(argc, argv, "t:p:f:");
-
-    fd_set sel_fds;
-
-    char *fname;
 
     //Parse command line options
     while (opt_char != -1) {
@@ -31,22 +36,40 @@ int main(int argc, char *argv[])
             poll_rate = atoi(optarg);
             break;
         case 'f':
-            fname = optarg;
-            out_file = fopen(fname, "w");
+            f_name = optarg;
+            out_file = fopen(f_name, "w");
             if (out_file == NULL) {
                 perror("IO Error");
                 return -1;
             }
 
-            printf("Output filename: %s\n", fname);
+            printf("Output filename: %s\n", f_name);
         }
     }
 
-    //Set up a timeout to make selects non-blocking
-    //We have the select time out every 100ms to keep cpu usage down
-    struct timeval wii_poll_timeout;
-    wii_poll_timeout.tv_sec = 5;
-    wii_poll_timeout.tv_usec = 1000000 / poll_rate;
+    return 0;
+}
+
+long get_time_ms(struct timeval *t)
+{
+    return t->tv_sec * 1000 + t->tv_usec / 1000;
+}
+
+vec3 extract_vector(struct xwii_event *evt, vec3 *v)
+{
+    struct xwii_event_abs payload = evt->v.abs[0];
+    v->x = payload.x;
+    v->y = payload.y;
+    v->z = payload.z;
+}
+
+
+int main(int argc, char *argv[])
+{
+    int cmd_result = parse_cmdline(argc, argv);
+    if (cmd_result != 0) {
+        return -1;
+    }
 
     //Start searching for wiimotes
     struct xwii_monitor *wii_mon = xwii_monitor_new(true, false);
@@ -95,7 +118,14 @@ int main(int argc, char *argv[])
         if (poll_fds[1].revents & POLLIN) {
             int events_ready = xwii_iface_dispatch(wii_dev, &wii_evt, sizeof(wii_evt));
             while (events_ready == 0) {
-                printf("Got event with ID: %d\n", wii_evt.type);
+                if (wii_evt.type == XWII_EVENT_ACCEL || wii_evt.type == XWII_EVENT_MOTION_PLUS) {
+                    //Get a timestamp for this measurement
+                    long time_ms = get_time_ms(&wii_evt.time);
+                    vec3 v;
+                    extract_vector(&wii_evt, &v);
+
+                    printf("%d,%ld,%d,%d,%d\n", wii_evt.type, time_ms, v.x, v.y, v.z);
+                }
                 events_ready = xwii_iface_dispatch(wii_dev, &wii_evt, sizeof(wii_evt));
             }
         }
